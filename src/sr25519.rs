@@ -86,7 +86,7 @@ fn create_from_seed(seed: &[u8]) -> Keypair {
 fn create_from_pair(pair: &[u8]) -> Keypair {
     match Keypair::from_bytes(pair) {
         Ok(pair) => return pair,
-        Err(_) => panic!(format!("Provided pair is invalid: {:?}", pair)),
+        Err(_) => panic!("Provided pair is invalid: {:?}", pair),
     }
 }
 
@@ -259,6 +259,29 @@ pub unsafe extern "C" fn sr25519_sign(
 /// * returned true if signature is valid, false otherwise
 #[allow(unused_attributes)]
 #[no_mangle]
+pub unsafe extern "C" fn sr25519_verify_deprecated(
+    signature_ptr: *const u8,
+    message_ptr: *const u8,
+    message_length: c_ulong,
+    public_ptr: *const u8,
+) -> bool {
+    let public = slice::from_raw_parts(public_ptr, SR25519_PUBLIC_SIZE as usize);
+    let signature = slice::from_raw_parts(signature_ptr, SR25519_SIGNATURE_SIZE as usize);
+    let message = slice::from_raw_parts(message_ptr, message_length as usize);
+    
+    create_public(public).verify_simple_preaudit_deprecated(SIGNING_CTX, message, &signature).is_ok()
+}
+
+/// Verify a message and its corresponding against a public key;
+///
+/// * signature_ptr: verify this signature
+/// * message_ptr: Arbitrary message; input buffer of message_length bytes
+/// * message_length: Message size
+/// * public_ptr: verify with this public key; input buffer of SR25519_PUBLIC_SIZE bytes
+///
+/// * returned true if signature is valid, false otherwise
+#[allow(unused_attributes)]
+#[no_mangle]
 pub unsafe extern "C" fn sr25519_verify(
     signature_ptr: *const u8,
     message_ptr: *const u8,
@@ -272,7 +295,6 @@ pub unsafe extern "C" fn sr25519_verify(
         Ok(signature) => signature,
         Err(_) => return false,
     };
-
     create_public(public).verify_simple(SIGNING_CTX, message, &signature).is_ok()
 }
 
