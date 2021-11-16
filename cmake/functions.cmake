@@ -5,12 +5,12 @@ function(disable_clang_tidy target)
       )
 endfunction()
 
-function(addtest test_name)
+function(schnorrkel_add_test test_name)
   add_executable(${test_name} ${ARGN})
-  addtest_part(${test_name} ${ARGN})
+  schnorrkel_add_test_part(${test_name} ${ARGN})
   target_link_libraries(${test_name}
-      GTest::main
-      GMock::main
+      GTest::gmock_main
+      GTest::gtest
       )
   add_test(
       NAME ${test_name}
@@ -24,7 +24,7 @@ function(addtest test_name)
   disable_clang_tidy(${test_name})
 endfunction()
 
-function(addtest_part test_name)
+function(schnorrkel_add_test_part test_name)
   if (POLICY CMP0076)
     cmake_policy(SET CMP0076 NEW)
   endif ()
