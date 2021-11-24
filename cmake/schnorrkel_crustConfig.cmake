@@ -50,8 +50,6 @@ if(NOT TARGET schnorrkel_crust::schnorrkel_crust)
         INTERFACE_INCLUDE_DIRECTORIES ${include_path}
         IMPORTED_LOCATION ${lib_path}
         )
-else()
-    message(FATAL_ERROR "Target schnorrkel_crust::schnorrkel_crust is already defined!")
 endif()
 
 unset(shared_lib_name)
