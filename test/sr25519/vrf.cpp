@@ -10,6 +10,7 @@
 
 #include "../utils.hpp"
 #include "transcript.hpp"
+#include "make_transcript.hpp"
 
 extern "C" {
 #include <schnorrkel/schnorrkel.h>
@@ -72,23 +73,6 @@ TEST(VrfTest, SignAndCheck) {
                                message.data(), message.size(), limit.data());
   ASSERT_EQ(res1.result, SR25519_SIGNATURE_RESULT_OK);
   EXPECT_TRUE(res1.is_less);
-}
-
-template <size_t MsgBufSize>
-Strobe128 makeTranscript(std::string_view message) {
-  primitives::Transcript t;
-  t.initialize({'B', 'A', 'B', 'E'});
-  char msg_buf[MsgBufSize];
-  std::fill_n(msg_buf, MsgBufSize, 0);
-  std::memcpy(msg_buf, message.data(), message.size());
-  t.append_message({'m', 'e', 's', 's', 'a', 'g', 'e'}, msg_buf);
-
-  Strobe128 strobe;
-  std::memcpy(strobe.state, t.data().data(), t.data().size());
-  strobe.pos = t.state().current_position;
-  strobe.cur_flags = t.state().current_state;
-  strobe.pos_begin = t.state().begin_position;
-  return strobe;
 }
 
 TEST(VrfTest, SignAndVerifyTranscript) {

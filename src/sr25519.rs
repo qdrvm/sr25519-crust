@@ -136,6 +136,13 @@ pub const SR25519_VRF_RAW_OUTPUT_SIZE: c_ulong = 16;
 /// Size of VRF limit, bytes
 pub const SR25519_VRF_THRESHOLD_SIZE: c_ulong = 16;
 
+/// Size of VRF Story limit size
+pub const RELAY_VRF_STORY_SIZE : usize = 32;
+
+/// A static context used to compute the Relay VRF story based on the
+/// VRF output included in the header-chain.
+pub const RELAY_VRF_STORY_CONTEXT: &[u8] = b"A&V RC-VRF";
+
 /// Perform a derivation on a secret
 ///
 /// * keypair_out: pre-allocated output buffer of SR25519_KEYPAIR_SIZE bytes
@@ -424,6 +431,48 @@ pub unsafe extern "C" fn sr25519_vrf_verify(
     } else {
         VrfResult::create_err(&SignatureError::EquationFalse)
     }
+}
+
+/// VRFOutput C representation. Can be used from C-code to deliver data into rust.
+#[repr(C)]
+#[derive(Clone)]
+pub struct VRFCOutput {
+    /// data array with VRFOutput
+    pub data: [u8; 32],
+}
+
+/// RelayVRFStory C representation. Can be used from C-code to deliver data into rust.
+#[repr(C)]
+#[derive(Debug, Clone)]
+pub struct RelayVRFStory {
+    /// data array with RelayVRFStory
+    pub data: [u8; RELAY_VRF_STORY_SIZE],
+}
+
+/// Computes the randomness of provided transcript and vrf_output
+/// @param public_key_ptr - pointer to public key
+/// @param transcript_data - pointer to a Strobe object, which is an internal representation of the transcript data
+/// @param vrf_output - byte array with vrf_output
+/// @param out_relay_vrf_story - pointer to output array with data
+#[allow(unused_attributes)]
+#[no_mangle]
+pub unsafe extern "C" fn sr25519_vrf_compute_randomness(
+    public_key_ptr: *const u8,
+    transcript_data: *mut Strobe128,
+    vrf_output: *const VRFCOutput,
+    out_relay_vrf_story: *mut RelayVRFStory,
+) -> Sr25519SignatureResult {
+    let pk = create_public(slice::from_raw_parts(public_key_ptr, SR25519_PUBLIC_SIZE as usize));
+    let t = std::mem::transmute::<*mut Strobe128, &mut Transcript>(transcript_data);
+    let v = std::mem::transmute::<*const VRFCOutput, &VRFOutput>(vrf_output);
+
+    let vrf_in_out = match v.attach_input_hash(&pk, t) {
+        Ok(val) => val,
+        Err(err) => return convert_error(&err)
+    };
+
+    (*out_relay_vrf_story).data = vrf_in_out.make_bytes(RELAY_VRF_STORY_CONTEXT);
+    return Sr25519SignatureResult::Ok;
 }
 
 /// This is literally a copy of Strobe128 from merlin lib

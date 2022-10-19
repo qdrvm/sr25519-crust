@@ -6,6 +6,7 @@
 #include <gtest/gtest.h>
 
 #include "../utils.hpp"
+#include "make_transcript.hpp"
 
 extern "C" {
 #include <schnorrkel/schnorrkel.h>
@@ -25,6 +26,34 @@ TEST(sr25519, SignAndVerifyValid) {
                               kp.data() + SR25519_SECRET_SIZE);
 
   EXPECT_TRUE(valid);
+}
+
+TEST(sr25519, VRF_ComputeRandomness) {
+    auto kp = randomKeypair(SR25519_KEYPAIR_SIZE, sr25519_keypair_from_seed);
+    auto public_key = std::vector<uint8_t>(
+            kp.begin() + SR25519_SECRET_SIZE, kp.end());
+
+    auto message = "Hello, world!"_v;
+
+    std::array<uint8_t, SR25519_VRF_OUTPUT_SIZE + SR25519_VRF_PROOF_SIZE>
+            out_and_proof{};
+
+    auto limit = std::vector<uint8_t>(16, 0xFF);
+
+    auto res1 =
+            sr25519_vrf_sign_if_less(out_and_proof.data(), kp.data(),
+                                     message.data(), message.size(), limit.data());
+    ASSERT_EQ(res1.result, SR25519_SIGNATURE_RESULT_OK);
+    ASSERT_TRUE(res1.is_less);
+
+    auto t = makeTranscript<14>("Hello, world!"s);
+
+    RelayVRFStory rvs{};
+    VRFCOutput vrfc_out{};
+    memcpy(vrfc_out.data, out_and_proof.data(), SR25519_VRF_OUTPUT_SIZE);
+
+    auto res = sr25519_vrf_compute_randomness(public_key.data(), &t, &vrfc_out, &rvs);
+    ASSERT_EQ(res, SR25519_SIGNATURE_RESULT_OK);
 }
 
 TEST(sr25519, SignAndVerifyInvalid) {
