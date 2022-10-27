@@ -727,6 +727,7 @@ pub unsafe extern "C" fn sr25519_vrf_verify_transcript(
 /// @param leaving_cores_num - number of elements in leaving cores array
 /// @param cert_output - certificate output
 /// @param cert_proof - certificate proof
+/// @param core_out - output leaving core
 #[allow(unused_attributes)]
 #[no_mangle]
 pub unsafe extern "C" fn sr25519_relay_vrf_modulo_assignments_cert(
@@ -738,10 +739,11 @@ pub unsafe extern "C" fn sr25519_relay_vrf_modulo_assignments_cert(
     leaving_cores_num: u32,
     cert_output: *mut VRFCOutput,
     cert_proof: *mut VRFCProof,
+    core_out: *mut u32,
 ) -> bool {
-    /// We want to panic! in release as well.
     assert!(!cert_output.is_null());
     assert!(!cert_proof.is_null());
+    assert!(!core_out.is_null());
 
     let keypair_bytes = slice::from_raw_parts(keypair_ptr, SR25519_KEYPAIR_SIZE as usize);
     let assignments_key = create_from_pair(keypair_bytes);
@@ -775,6 +777,7 @@ pub unsafe extern "C" fn sr25519_relay_vrf_modulo_assignments_cert(
     if let Some((vrf_in_out, vrf_proof, _)) = maybe_assignment {
         // Sanity: `core` is always initialized to non-default here, as the closure above
         // has been executed.
+        *core_out = core;
         cert_output.data = *vrf_in_out.as_output_bytes();
         cert_proof.data = vrf_proof.to_bytes();
         true
@@ -803,6 +806,10 @@ pub unsafe extern "C" fn sr25519_relay_vrf_delay_assignments_cert(
     cert_proof: *mut VRFCProof,
     tranche_out: *mut u32,
 ) {
+    assert!(!cert_output.is_null());
+    assert!(!cert_proof.is_null());
+    assert!(!tranche_out.is_null());
+
     let keypair_bytes = slice::from_raw_parts(keypair_ptr, SR25519_KEYPAIR_SIZE as usize);
     let assignments_key = create_from_pair(keypair_bytes);
 
