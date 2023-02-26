@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <functional>
 #include <iomanip>
 #include <random>
 #include <sstream>

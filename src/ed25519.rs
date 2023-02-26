@@ -1,7 +1,10 @@
-use ed25519_dalek::{PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH, Signer, Keypair, Verifier, PublicKey, KEYPAIR_LENGTH, SecretKey};
-use std::os::raw::{c_ulong};
-use std::{slice, ptr};
 use ed25519_dalek::ed25519::signature::Signature;
+use ed25519_dalek::{
+    Keypair, PublicKey, SecretKey, Signer, Verifier, KEYPAIR_LENGTH, PUBLIC_KEY_LENGTH,
+    SIGNATURE_LENGTH,
+};
+use std::os::raw::c_ulong;
+use std::{ptr, slice};
 
 /// Length of a random generator seed
 pub const ED25519_SEED_LENGTH: c_ulong = 32;
@@ -46,9 +49,7 @@ pub enum Ed25519Result {
  * @arg seed_ptr - the seed that will be used as a secret key
  */
 #[no_mangle]
-pub unsafe extern "C" fn ed25519_keypair_from_seed(
-    keypair_out: *mut u8,
-    seed_ptr: *const u8) {
+pub unsafe extern "C" fn ed25519_keypair_from_seed(keypair_out: *mut u8, seed_ptr: *const u8) {
     if keypair_out.is_null() || seed_ptr.is_null() {
         return;
     }
@@ -57,22 +58,25 @@ pub unsafe extern "C" fn ed25519_keypair_from_seed(
     let secret_key = SecretKey::from_bytes(seed)
         .expect("SecretKey::from_bytes may throw only if the size of the supplied seed is wrong.");
     let public_key: PublicKey = (&secret_key).into();
-    let keypair = Keypair { public: public_key, secret: secret_key };
+    let keypair = Keypair {
+        public: public_key,
+        secret: secret_key,
+    };
     ptr::copy_nonoverlapping(keypair.to_bytes().as_ptr(), keypair_out, KEYPAIR_LENGTH);
 }
-
 
 /**
  * Sign the message using the provided keypair
  * @returns a status code as the function return value, a signature as an output parameter
  */
 #[no_mangle]
-pub unsafe extern "C" fn ed25519_sign(signature_out: *mut u8,
-                                      keypair_ptr: *const u8,
-                                      message_ptr: *const u8,
-                                      message_size: c_ulong) -> Ed25519Result {
-    if keypair_ptr.is_null() || message_ptr.is_null()
-    {
+pub unsafe extern "C" fn ed25519_sign(
+    signature_out: *mut u8,
+    keypair_ptr: *const u8,
+    message_ptr: *const u8,
+    message_size: c_ulong,
+) -> Ed25519Result {
+    if keypair_ptr.is_null() || message_ptr.is_null() {
         return Ed25519Result::NullArgument;
     }
     let message = slice::from_raw_parts(message_ptr, message_size as usize);
@@ -86,7 +90,11 @@ pub unsafe extern "C" fn ed25519_sign(signature_out: *mut u8,
         Err(e) => return Ed25519Result::SignFailed,
     };
     if keypair.verify(message, &signature).is_ok() {
-        ptr::copy_nonoverlapping(signature.to_bytes().as_ptr(), signature_out, SIGNATURE_LENGTH);
+        ptr::copy_nonoverlapping(
+            signature.to_bytes().as_ptr(),
+            signature_out,
+            SIGNATURE_LENGTH,
+        );
         Ed25519Result::Ok
     } else {
         Ed25519Result::VerificationFailed
@@ -97,10 +105,12 @@ pub unsafe extern "C" fn ed25519_sign(signature_out: *mut u8,
  * Verify a signature of a message using provided public key
  */
 #[no_mangle]
-pub unsafe extern "C" fn ed25519_verify(signature_ptr: *const u8,
-                                        public_key_ptr: *const u8,
-                                        message_ptr: *const u8,
-                                        message_size: c_ulong) -> Ed25519Result {
+pub unsafe extern "C" fn ed25519_verify(
+    signature_ptr: *const u8,
+    public_key_ptr: *const u8,
+    message_ptr: *const u8,
+    message_size: c_ulong,
+) -> Ed25519Result {
     if public_key_ptr.is_null() || signature_ptr.is_null() || message_ptr.is_null() {
         return Ed25519Result::NullArgument;
     }
@@ -109,11 +119,11 @@ pub unsafe extern "C" fn ed25519_verify(signature_ptr: *const u8,
     let message_bytes = slice::from_raw_parts(message_ptr, message_size as usize);
     let public_key = match PublicKey::from_bytes(public_key_bytes) {
         Ok(pk) => pk,
-        Err(_) => return Ed25519Result::PublicKeyFromBytesFailed
+        Err(_) => return Ed25519Result::PublicKeyFromBytesFailed,
     };
     let signature = match Signature::from_bytes(signature_bytes) {
         Ok(sign) => sign,
-        Err(_) => return Ed25519Result::SignatureFromBytesFailed
+        Err(_) => return Ed25519Result::SignatureFromBytesFailed,
     };
     if public_key.verify(message_bytes, &signature).is_ok() {
         Ed25519Result::Ok
@@ -122,13 +132,11 @@ pub unsafe extern "C" fn ed25519_verify(signature_ptr: *const u8,
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand_chacha::{ChaCha20Rng};
     use rand_chacha::rand_core::SeedableRng;
-
+    use rand_chacha::ChaCha20Rng;
 
     fn generate_random_seed() -> Vec<u8> {
         (0..32).map(|_| rand::random::<u8>()).collect()
@@ -161,15 +169,21 @@ mod tests {
         let mut signature = [0u8; ED25519_SIGNATURE_LENGTH as usize];
         let message = "Hello, world!\n";
         unsafe {
-            let status = ed25519_sign(signature.as_mut_ptr(),
-                                      keypair.as_ptr(),
-                                      message.as_ptr(), message.len() as u64);
+            let status = ed25519_sign(
+                signature.as_mut_ptr(),
+                keypair.as_ptr(),
+                message.as_ptr(),
+                message.len() as u64,
+            );
             assert_eq!(status, Ed25519Result::Ok);
         }
         unsafe {
-            let status = ed25519_verify(signature.as_mut_ptr(),
-                                        keypair[32..].as_ptr(),
-                                        message.as_ptr(), message.len() as u64);
+            let status = ed25519_verify(
+                signature.as_mut_ptr(),
+                keypair[32..].as_ptr(),
+                message.as_ptr(),
+                message.len() as u64,
+            );
             assert_eq!(status, Ed25519Result::Ok);
         }
     }

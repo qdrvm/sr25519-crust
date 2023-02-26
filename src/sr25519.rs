@@ -3,14 +3,25 @@ use std::ptr;
 use std::slice;
 
 pub use merlin::Transcript;
+use schnorrkel::vrf::{VRFProofBatchable, VRFSigningTranscript};
 use schnorrkel::{
     context::signing_context,
     derive::{ChainCode, Derivation, CHAIN_CODE_LENGTH},
     vrf::{VRFInOut, VRFOutput, VRFProof},
     ExpansionMode, Keypair, MiniSecretKey, PublicKey, SecretKey, Signature, SignatureError,
+    SignatureResult,
 };
 use std::convert::TryInto;
 use std::fmt::{Error, Formatter};
+
+macro_rules! return_if_err {
+    ($expr:expr) => {
+        match $expr {
+            Ok(val) => val,
+            Err(err) => return convert_error(&err).into(),
+        }
+    };
+}
 
 // cbindgen has an issue with macros, so define it outside,
 // otherwise it would've been possible to avoid duplication of macro variant list
@@ -429,7 +440,7 @@ impl std::fmt::Debug for VrfResult {
         f.write_str(", ")?;
         write!(f, "{:?}", self)?;
         f.write_str(" }")?;
-        Result::Ok(())
+        Ok(())
     }
 }
 
@@ -478,6 +489,15 @@ pub unsafe extern "C" fn sr25519_vrf_sign_if_less(
     VrfResult::create_val(check)
 }
 
+impl From<Sr25519SignatureResult> for VrfResult {
+    fn from(value: Sr25519SignatureResult) -> Self {
+        VrfResult {
+            result: value,
+            is_less: false,
+        }
+    }
+}
+
 /// Verify a signature produced by a VRF with its original input and the corresponding proof and
 /// check if the result of the function is less than the threshold.
 /// @note If errors, is_less field of the returned structure is not meant to contain a valid value
@@ -502,24 +522,16 @@ pub unsafe extern "C" fn sr25519_vrf_verify(
     ));
     let message = slice::from_raw_parts(message_ptr, message_length as usize);
     let ctx = signing_context(SIGNING_CTX).bytes(message);
-    let given_out = match VRFOutput::from_bytes(slice::from_raw_parts(
+    let given_out = return_if_err!(VRFOutput::from_bytes(slice::from_raw_parts(
         output_ptr,
         SR25519_VRF_OUTPUT_SIZE as usize,
-    )) {
-        Ok(val) => val,
-        Err(err) => return VrfResult::create_err(&err),
-    };
-    let given_proof = match VRFProof::from_bytes(slice::from_raw_parts(
+    )));
+    let given_proof = return_if_err!(VRFProof::from_bytes(slice::from_raw_parts(
         proof_ptr,
         SR25519_VRF_PROOF_SIZE as usize,
-    )) {
-        Ok(val) => val,
-        Err(err) => return VrfResult::create_err(&err),
-    };
-    let (in_out, proof) = match public_key.vrf_verify(ctx.clone(), &given_out, &given_proof) {
-        Ok(val) => val,
-        Err(err) => return VrfResult::create_err(&err),
-    };
+    )));
+    let (in_out, proof) =
+        return_if_err!(public_key.vrf_verify(ctx.clone(), &given_out, &given_proof));
     let raw_output =
         in_out.make_bytes::<[u8; SR25519_VRF_RAW_OUTPUT_SIZE as usize]>(BABE_VRF_PREFIX);
 
@@ -592,11 +604,7 @@ pub unsafe extern "C" fn sr25519_vrf_compute_randomness(
     let t = std::mem::transmute::<*mut Strobe128, &mut Transcript>(transcript_data);
     let v = std::mem::transmute::<*const VRFCOutput, &VRFOutput>(vrf_output);
 
-    let vrf_in_out = match v.attach_input_hash(&pk, t) {
-        Ok(val) => val,
-        Err(err) => return convert_error(&err),
-    };
-
+    let vrf_in_out = return_if_err!(v.attach_input_hash(&pk, t));
     (*out_relay_vrf_story).data = vrf_in_out.make_bytes(RELAY_VRF_STORY_CONTEXT);
     return Sr25519SignatureResult::Ok;
 }
@@ -658,6 +666,30 @@ pub unsafe extern "C" fn sr25519_vrf_sign_transcript(
     VrfResult::create_val(check)
 }
 
+fn vrf_verify_transcript<T>(
+    pk: PublicKey,
+    transcript: T,
+    output_ptr: *const u8,
+    proof_ptr: *const u8,
+) -> SignatureResult<(VRFInOut, VRFProofBatchable)>
+where
+    T: VRFSigningTranscript,
+{
+    let (out, proof) = unsafe {
+        let out = VRFOutput::from_bytes(slice::from_raw_parts(
+            output_ptr,
+            SR25519_VRF_OUTPUT_SIZE as usize,
+        ))?;
+        let proof = VRFProof::from_bytes(slice::from_raw_parts(
+            proof_ptr,
+            SR25519_VRF_PROOF_SIZE as usize,
+        ))?;
+
+        (out, proof)
+    };
+    pk.vrf_verify(transcript, &out, &proof)
+}
+
 /// Verify a signature produced by a VRF with its original input transcript and the corresponding proof and
 /// check if the result of the function is less than the threshold.
 /// @note If errors, is_less field of the returned structure is not meant to contain a valid value
@@ -681,24 +713,9 @@ pub unsafe extern "C" fn sr25519_vrf_verify_transcript(
         SR25519_PUBLIC_SIZE as usize,
     ));
     let transcript = std::mem::transmute::<*const Strobe128, &mut Transcript>(transcript_data);
-    let given_out = match VRFOutput::from_bytes(slice::from_raw_parts(
-        output_ptr,
-        SR25519_VRF_OUTPUT_SIZE as usize,
-    )) {
-        Ok(val) => val,
-        Err(err) => return VrfResult::create_err(&err),
-    };
-    let given_proof = match VRFProof::from_bytes(slice::from_raw_parts(
-        proof_ptr,
-        SR25519_VRF_PROOF_SIZE as usize,
-    )) {
-        Ok(val) => val,
-        Err(err) => return VrfResult::create_err(&err),
-    };
-    let (in_out, _) = match public_key.vrf_verify(transcript, &given_out, &given_proof) {
-        Ok(val) => val,
-        Err(err) => return VrfResult::create_err(&err),
-    };
+    let (in_out, _) = return_if_err!(vrf_verify_transcript(
+        public_key, transcript, output_ptr, proof_ptr
+    ));
     let raw_output =
         in_out.make_bytes::<[u8; SR25519_VRF_RAW_OUTPUT_SIZE as usize]>(BABE_VRF_PREFIX);
 
@@ -786,6 +803,51 @@ pub unsafe extern "C" fn sr25519_relay_vrf_modulo_assignments_cert(
     }
 }
 
+/// Makes verification with the given VRF proof and output and calculates tranche value
+/// @param public_key_ptr byte representation of the public key that was used to sign the message
+/// @param output_ptr the signature
+/// @param proof_ptr the proof of the signature
+/// @param n_delay_tranches - the number of delay tranches in total.
+/// @param zeroth_delay_tranche_width - the zeroth delay tranche width.
+/// @param relay_vrf_story - relay vrf story
+/// @param core_index - leaving core for computing
+/// @param tranche_out - output tranche
+#[allow(unused_attributes)]
+#[no_mangle]
+pub unsafe extern "C" fn sr25519_vrf_verify_and_get_tranche(
+    public_key_ptr: *const u8,
+    output_ptr: *const u8,
+    proof_ptr: *const u8,
+    n_delay_tranches: u32,
+    zeroth_delay_tranche_width: u32,
+    relay_vrf_story: *const RelayVRFStory,
+    core_index: u32,
+    tranche_out: *mut u32,
+) -> Sr25519SignatureResult {
+    assert!(!public_key_ptr.is_null());
+    assert!(!output_ptr.is_null());
+    assert!(!proof_ptr.is_null());
+    assert!(!relay_vrf_story.is_null());
+    assert!(!tranche_out.is_null());
+
+    let public_key = create_public(slice::from_raw_parts(
+        public_key_ptr,
+        SR25519_PUBLIC_SIZE as usize,
+    ));
+
+    let tranche_out = tranche_out.as_mut().unwrap();
+    let relay_vrf_story =
+        std::mem::transmute::<*const RelayVRFStory, &RelayVRFStory>(relay_vrf_story);
+
+    let transcript = relay_vrf_delay_transcript(relay_vrf_story.clone(), core_index);
+    let (vrf_in_out, _) = return_if_err!(vrf_verify_transcript(
+        public_key, transcript, output_ptr, proof_ptr
+    ));
+    *tranche_out =
+        relay_vrf_delay_tranche(&vrf_in_out, n_delay_tranches, zeroth_delay_tranche_width);
+    Sr25519SignatureResult::Ok
+}
+
 /// Computes output and proof for valid VRF delayed assignment certificate and tranche.
 /// @param keypair_ptr - byte repr of valid keypair for signing
 /// @param n_delay_tranches - the number of delay tranches in total.
@@ -818,7 +880,7 @@ pub unsafe extern "C" fn sr25519_relay_vrf_delay_assignments_cert(
 
     let cert_output = std::mem::transmute::<*mut VRFCOutput, &mut VRFCOutput>(cert_output);
     let cert_proof = std::mem::transmute::<*mut VRFCProof, &mut VRFCProof>(cert_proof);
-    let tranche_out = std::mem::transmute::<*mut u32, &mut u32>(tranche_out);
+    let tranche_out = tranche_out.as_mut().unwrap();
 
     let (vrf_in_out, vrf_proof, _) =
         assignments_key.vrf_sign(relay_vrf_delay_transcript(relay_vrf_story.clone(), core));

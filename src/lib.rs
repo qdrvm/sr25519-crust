@@ -20,10 +20,8 @@
 //! Glue code to generate C headers for sr25519 and ed25519 rust implementations
 //!
 
-
 /// Glue code for Dalek's Ed25519 implementation
 pub mod ed25519;
 
 /// Glue code for Schnorrkel
 pub mod sr25519;
-
