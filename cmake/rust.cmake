@@ -1,14 +1,16 @@
 find_program(RUSTC rustc REQUIRED)
 find_program(CARGO cargo REQUIRED)
 
-if (CMAKE_BUILD_TYPE STREQUAL "Release")
-  set(path_prefix "${CMAKE_BINARY_DIR}/release")
+if (CMAKE_BUILD_TYPE STREQUAL "Release" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
+  set(build_type "release")
   set(release_option "--release")
-  message(STATUS "CMAKE_BUILD_TYPE=Release, adding ${release_option}")
+  message(STATUS "CMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}, adding ${release_option}")
 else ()
-  set(path_prefix "${CMAKE_BINARY_DIR}/debug")
+  message(STATUS "CMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}, default Debug is used")
+  set(build_type "debug")
 endif ()
 
+set(path_prefix "${CMAKE_BINARY_DIR}/${build_type}")
 
 if (BUILD_SHARED_LIBS)
   set(lib ${path_prefix}/${CMAKE_SHARED_LIBRARY_PREFIX}schnorrkel_crust${CMAKE_SHARED_LIBRARY_SUFFIX})
@@ -79,7 +81,7 @@ install(
 )
 install(
     FILES ${lib}
-    TYPE LIB
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/${build_type}
 )
 
 install(
