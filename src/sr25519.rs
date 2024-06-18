@@ -1,8 +1,13 @@
+use std::cmp::min;
 use std::os::raw::c_ulong;
 use std::ptr;
 use std::slice;
 
+use itertools::Itertools;
 pub use merlin::Transcript;
+use parity_scale_codec::Encode;
+use rand::{seq::SliceRandom, SeedableRng};
+use rand_chacha::ChaCha20Rng;
 use schnorrkel::vrf::{VRFProofBatchable, VRFSigningTranscript};
 use schnorrkel::{
     context::signing_context,
@@ -13,6 +18,29 @@ use schnorrkel::{
 };
 use std::convert::TryInto;
 use std::fmt::{Error, Formatter};
+
+use crate::bitfield::CoreBitfield;
+use crate::constants::ASSIGNED_CORE_CONTEXT;
+use crate::constants::ASSIGNED_CORE_CONTEXT_V2;
+use crate::constants::CORE_RANDOMNESS_CONTEXT;
+use crate::constants::CORE_RANDOMNESS_CONTEXT_V2;
+use crate::constants::MAX_MODULO_SAMPLES;
+use crate::constants::RELAY_VRF_DELAY_CONTEXT;
+use crate::constants::RELAY_VRF_MODULO_CONTEXT;
+use crate::constants::RELAY_VRF_MODULO_CONTEXT_V2;
+use crate::constants::RELAY_VRF_STORY_CONTEXT;
+use crate::constants::RELAY_VRF_STORY_SIZE;
+use crate::constants::SR25519_CHAINCODE_SIZE;
+use crate::constants::SR25519_KEYPAIR_SIZE;
+use crate::constants::SR25519_PUBLIC_SIZE;
+use crate::constants::SR25519_SECRET_SIZE;
+use crate::constants::SR25519_SEED_SIZE;
+use crate::constants::SR25519_SIGNATURE_SIZE;
+use crate::constants::SR25519_VRF_OUTPUT_SIZE;
+use crate::constants::SR25519_VRF_PROOF_SIZE;
+use crate::constants::SR25519_VRF_RAW_OUTPUT_SIZE;
+use crate::constants::SR25519_VRF_THRESHOLD_SIZE;
+use crate::constants::TRANCHE_RANDOMNESS_CONTEXT;
 
 macro_rules! return_if_err {
     ($expr:expr) => {
@@ -123,57 +151,20 @@ fn create_secret(secret: &[u8]) -> SecretKey {
     }
 }
 
-/// Size of input SEED for derivation, bytes
-pub const SR25519_SEED_SIZE: c_ulong = 32;
+// Combines the relay VRF story with a sample number if any.
+fn relay_vrf_modulo_transcript_inner(
+    mut transcript: Transcript,
+    relay_vrf_story: RelayVRFStory,
+    sample: Option<u32>,
+) -> Transcript {
+    transcript.append_message(b"RC-VRF", &relay_vrf_story.data);
 
-/// Size of CHAINCODE, bytes
-pub const SR25519_CHAINCODE_SIZE: c_ulong = 32;
+    if let Some(sample) = sample {
+        sample.using_encoded(|s| transcript.append_message(b"sample", s));
+    }
 
-/// Size of SR25519 PUBLIC KEY, bytes
-pub const SR25519_PUBLIC_SIZE: c_ulong = 32;
-
-/// Size of SR25519 PRIVATE (SECRET) KEY, which consists of [32 bytes key | 32 bytes nonce]
-pub const SR25519_SECRET_SIZE: c_ulong = 64;
-
-/// Size of SR25519 SIGNATURE, bytes
-pub const SR25519_SIGNATURE_SIZE: c_ulong = 64;
-
-/// Size of SR25519 KEYPAIR. [32 bytes key | 32 bytes nonce | 32 bytes public]
-pub const SR25519_KEYPAIR_SIZE: c_ulong = 96;
-
-/// Size of VRF output, bytes
-pub const SR25519_VRF_OUTPUT_SIZE: usize = 32;
-
-/// Size of VRF proof, bytes
-pub const SR25519_VRF_PROOF_SIZE: usize = 64;
-
-/// Size of VRF raw output, bytes
-pub const SR25519_VRF_RAW_OUTPUT_SIZE: c_ulong = 16;
-
-/// Size of VRF limit, bytes
-pub const SR25519_VRF_THRESHOLD_SIZE: c_ulong = 16;
-
-/// Size of VRF Story limit size
-pub const RELAY_VRF_STORY_SIZE: usize = 32;
-
-/// A static context used to compute the Relay VRF story based on the
-/// VRF output included in the header-chain.
-pub const RELAY_VRF_STORY_CONTEXT: &[u8] = b"A&V RC-VRF";
-
-/// A static context used for all relay-vrf-modulo VRFs.
-pub const RELAY_VRF_MODULO_CONTEXT: &[u8] = b"A&V MOD";
-
-/// A static context associated with producing randomness for a core.
-pub const CORE_RANDOMNESS_CONTEXT: &[u8] = b"A&V CORE";
-
-/// A static context used for transcripts indicating assigned availability core.
-pub const ASSIGNED_CORE_CONTEXT: &[u8] = b"A&V ASSIGNED";
-
-/// A static context used for all relay-vrf-modulo VRFs.
-pub const RELAY_VRF_DELAY_CONTEXT: &[u8] = b"A&V DELAY";
-
-/// A static context associated with producing randomness for a tranche.
-pub const TRANCHE_RANDOMNESS_CONTEXT: &[u8] = b"A&V TRANCHE";
+    transcript
+}
 
 fn relay_vrf_modulo_transcript(relay_vrf_story: RelayVRFStory, sample: u32) -> Transcript {
     // combine the relay VRF story with a sample number.
@@ -184,6 +175,50 @@ fn relay_vrf_modulo_transcript(relay_vrf_story: RelayVRFStory, sample: u32) -> T
     t.append_message(b"sample", &buf[..]);
 
     t
+}
+
+fn relay_vrf_modulo_transcript_v2(relay_vrf_story: RelayVRFStory) -> Transcript {
+    relay_vrf_modulo_transcript_inner(
+        Transcript::new(RELAY_VRF_MODULO_CONTEXT_V2),
+        relay_vrf_story,
+        None,
+    )
+}
+
+/// Generates `num_samples` randomly from (0..max_cores) range
+///
+/// Note! The algorithm can't change because validators on the other
+/// side won't be able to check the assignments until they update.
+/// This invariant is tested with `generate_samples_invariant`, so the
+/// tests will catch any subtle changes in the implementation of this function
+/// and its dependencies.
+fn generate_samples(
+    mut rand_chacha: ChaCha20Rng,
+    num_samples: usize,
+    max_cores: usize,
+) -> Vec<u32> {
+    let num_samples = min(MAX_MODULO_SAMPLES, min(num_samples, max_cores));
+
+    let mut random_cores = (0..max_cores as u32)
+        .map(|val| val.into())
+        .collect::<Vec<u32>>();
+    let (samples, _) = random_cores.partial_shuffle(&mut rand_chacha, num_samples as usize);
+    samples.into_iter().map(|val| *val).collect_vec()
+}
+
+/// Takes the VRF output as input and returns a Vec of cores the validator is assigned
+/// to as a tranche0 checker.
+fn relay_vrf_modulo_cores(
+    vrf_in_out: &VRFInOut,
+    // Configuration - `relay_vrf_modulo_samples`.
+    num_samples: u32,
+    // Configuration - `n_cores`.
+    max_cores: u32,
+) -> Vec<u32> {
+    let rand_chacha = ChaCha20Rng::from_seed(
+        vrf_in_out.make_bytes::<<ChaCha20Rng as SeedableRng>::Seed>(CORE_RANDOMNESS_CONTEXT_V2),
+    );
+    generate_samples(rand_chacha, num_samples as usize, max_cores as usize)
 }
 
 fn relay_vrf_modulo_core(vrf_in_out: &VRFInOut, n_cores: u32) -> u32 {
@@ -223,6 +258,12 @@ fn assigned_core_transcript(core_index: u32) -> Transcript {
     let mut t = Transcript::new(ASSIGNED_CORE_CONTEXT);
     let buf = core_index.to_le_bytes();
     t.append_message(b"core", &buf[..]);
+    t
+}
+
+fn assigned_cores_transcript(core_bitfield: &CoreBitfield) -> Transcript {
+    let mut t = Transcript::new(ASSIGNED_CORE_CONTEXT_V2);
+    core_bitfield.using_encoded(|s| t.append_message(b"cores", s));
     t
 }
 
@@ -733,6 +774,106 @@ pub unsafe extern "C" fn sr25519_vrf_verify_transcript(
 
     let check = u128::from_le_bytes(raw_output) < threshold_int;
     VrfResult::create_val(check)
+}
+
+/// Computes output and proof for valid VRF assignment certificate.
+/// @param keypair_ptr - byte repr of valid keypair for signing
+/// @param relay_vrf_modulo_samples - number of samples for transcript
+/// @param n_cores - number of available cores
+/// @param relay_vrf_story - relay vrf story
+/// @param leaving_cores_ptr - array of leaving cores
+/// @param leaving_cores_num - number of elements in leaving cores array
+/// @param cert_output - certificate output
+/// @param cert_proof - certificate proof
+/// @param cores_out - output leaving cores
+/// @param cores_out_sz - output leaving cores count
+/// @param cores_cap - output leaving cores capacity(need to dealloc)
+#[allow(unused_attributes)]
+#[no_mangle]
+pub unsafe extern "C" fn sr25519_relay_vrf_modulo_assignments_cert_v2(
+    keypair_ptr: *const u8,
+    relay_vrf_modulo_samples: u32,
+    n_cores: u32,
+    relay_vrf_story: *const RelayVRFStory,
+    leaving_cores_ptr: *const u32,
+    leaving_cores_num: u32,
+    cert_output: *mut VRFCOutput,
+    cert_proof: *mut VRFCProof,
+    cores_out: *mut *mut u32,
+    cores_out_sz: *mut u64,
+    cores_cap: *mut u64,
+) -> bool {
+    assert!(!cert_output.is_null());
+    assert!(!cert_proof.is_null());
+    assert!(!cores_out.is_null());
+    assert!(!cores_out_sz.is_null());
+    assert!(!cores_cap.is_null());
+
+    let keypair_bytes = slice::from_raw_parts(keypair_ptr, SR25519_KEYPAIR_SIZE as usize);
+    let assignments_key = create_from_pair(keypair_bytes);
+
+    let leaving_cores = slice::from_raw_parts(leaving_cores_ptr, leaving_cores_num as usize);
+
+    let relay_vrf_story =
+        std::mem::transmute::<*const RelayVRFStory, &RelayVRFStory>(relay_vrf_story);
+
+    let cert_output = std::mem::transmute::<*mut VRFCOutput, &mut VRFCOutput>(cert_output);
+    let cert_proof = std::mem::transmute::<*mut VRFCProof, &mut VRFCProof>(cert_proof);
+
+    let mut assigned_cores = Vec::new();
+    let maybe_assignment = {
+        let assigned_cores = &mut assigned_cores;
+        assignments_key.vrf_sign_extra_after_check(
+            relay_vrf_modulo_transcript_v2(relay_vrf_story.clone()),
+            |vrf_in_out| {
+                *assigned_cores =
+                    relay_vrf_modulo_cores(&vrf_in_out, relay_vrf_modulo_samples, n_cores)
+                        .into_iter()
+                        .filter(|core| leaving_cores.contains(&core))
+                        .collect::<Vec<u32>>();
+
+                if !assigned_cores.is_empty() {
+                    let assignment_bitfield: CoreBitfield = assigned_cores
+                        .clone()
+                        .try_into()
+                        .expect("Just checked `!assigned_cores.is_empty()`; qed");
+
+                    Some(assigned_cores_transcript(&assignment_bitfield))
+                } else {
+                    None
+                }
+            },
+        )
+    };
+
+    if let Some((vrf_in_out, vrf_proof, _)) = maybe_assignment {
+        let len = assigned_cores.len();
+        let assigned_cores = assigned_cores.into_raw_parts();
+
+        *cores_out = assigned_cores.0;
+        *cores_out_sz = assigned_cores.1 as u64;
+        *cores_cap = assigned_cores.2 as u64;
+
+        cert_output.data = *vrf_in_out.as_output_bytes();
+        cert_proof.data = vrf_proof.to_bytes();
+        true
+    } else {
+        false
+    }
+}
+
+/// Clears allocated memory
+/// @param cores_out - leaving cores
+/// @param cores_out_sz - leaving cores count
+/// @param cores_cap - leaving cores capacity
+#[allow(unused_attributes)]
+#[no_mangle]
+pub unsafe extern "C" fn sr25519_clear_assigned_cores_v2(
+    cores_out: *mut u32,
+    cores_out_sz: u64,
+    cores_cap: u64,
+) {
+    let _ = Vec::from_raw_parts(cores_out, cores_out_sz as usize, cores_cap as usize);
 }
 
 /// Computes output and proof for valid VRF assignment certificate.
