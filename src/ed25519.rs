@@ -6,23 +6,7 @@ use ed25519_dalek::{
 use std::os::raw::c_ulong;
 use std::{ptr, slice};
 
-/// Length of a random generator seed
-pub const ED25519_SEED_LENGTH: c_ulong = 32;
-
-/// The length of an ed25519 `PublicKey`, in bytes.
-pub const ED25519_PUBLIC_KEY_LENGTH: c_ulong = 32;
-
-/// The length of a ed25519 `SecretKey`, in bytes.
-pub const ED25519_SECRET_KEY_LENGTH: c_ulong = 32;
-
-/// The length of an ed25519 `Keypair`, in bytes.
-pub const ED25519_KEYPAIR_LENGTH: c_ulong = ED25519_PUBLIC_KEY_LENGTH + ED25519_SECRET_KEY_LENGTH;
-
-/// The length of a ed25519 `Signature`, in bytes.
-pub const ED25519_SIGNATURE_LENGTH: c_ulong = 64;
-
-/// The length of an "expanded" ed25519 key, `ExpandedSecretKey`, in bytes.
-pub const ED25519_EXPANDED_SECRET_KEY_LENGTH: c_ulong = 64;
+use crate::constants::ED25519_SEED_LENGTH;
 
 /// Status code of a function call
 #[repr(C)]
@@ -134,6 +118,8 @@ pub unsafe extern "C" fn ed25519_verify(
 
 #[cfg(test)]
 mod tests {
+    use crate::constants::{ED25519_KEYPAIR_LENGTH, ED25519_SIGNATURE_LENGTH};
+
     use super::*;
     use rand_chacha::rand_core::SeedableRng;
     use rand_chacha::ChaCha20Rng;

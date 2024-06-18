@@ -1,3 +1,4 @@
+#![feature(vec_into_raw_parts)]
 // Copyright 2019 Soramitsu via https://github.com/Warchant/sr25519-crust
 // Copyright 2019 Paritytech via https://github.com/paritytech/schnorrkel-js/
 // Copyright 2019 @polkadot/wasm-schnorrkel authors & contributors
@@ -7,7 +8,6 @@
 // Originally developed (as a fork) in https://github.com/polkadot-js/schnorrkel-js/
 // which was adopted from the initial https://github.com/paritytech/schnorrkel-js/
 // forked at commit eff430ddc3090f56317c80654208b8298ef7ab3f
-
 #![warn(missing_docs)] // refuse to compile if documentation is missing
 #![warn(rust_2018_compatibility)]
 #![warn(rust_2018_idioms)]
@@ -19,6 +19,11 @@
 //!
 //! Glue code to generate C headers for sr25519 and ed25519 rust implementations
 //!
+/// Bitfield impls
+pub mod bitfield;
+
+/// Constants
+pub mod constants;
 
 /// Glue code for Dalek's Ed25519 implementation
 pub mod ed25519;
