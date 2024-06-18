@@ -862,6 +862,20 @@ pub unsafe extern "C" fn sr25519_relay_vrf_modulo_assignments_cert_v2(
     }
 }
 
+/// Clears allocated memory
+/// @param cores_out - leaving cores
+/// @param cores_out_sz - leaving cores count
+/// @param cores_cap - leaving cores capacity
+#[allow(unused_attributes)]
+#[no_mangle]
+pub unsafe extern "C" fn sr25519_clear_assigned_cores_v2(
+    cores_out: *mut u32,
+    cores_out_sz: u64,
+    cores_cap: u64,
+) {
+    let _ = Vec::from_raw_parts(cores_out, cores_out_sz as usize, cores_cap as usize);
+}
+
 /// Computes output and proof for valid VRF assignment certificate.
 /// @param keypair_ptr - byte repr of valid keypair for signing
 /// @param rvm_sample - sample value for transcript
